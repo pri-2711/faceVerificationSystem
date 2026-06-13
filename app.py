@@ -7,8 +7,6 @@ import cv2
 import numpy as np
 import pandas as pd
 import base64
-import tkinter as tk
-from tkinter import filedialog
 from datetime import datetime
 from PIL import Image
 
@@ -27,6 +25,9 @@ import config
 
 # ── Folder picker ─────────────────────────────────────────────
 def pick_folder():
+    import tkinter as tk
+    from tkinter import filedialog
+
     root = tk.Tk()
     root.withdraw()
     root.wm_attributes("-topmost", True)
