@@ -253,7 +253,7 @@ def should_log(name):
 #  PAGE 1 — Live Verification
 # =============================================================
 if page == "Live Verification":
-    page_header("Live Verification", "Real-time face recognition via webcam")
+    page_header("Live Verification", "Browser-based face verification")
 
     users = load_all_users()
     if not users:
@@ -281,84 +281,38 @@ if page == "Live Verification":
     result_slot = st.empty()
 
     if st.session_state.run_cam:
-        cap         = cv2.VideoCapture(0)
-        frame_count = 0
+        notice(
+            "Streamlit Community Cloud cannot access your machine's webcam through OpenCV. "
+            "Use the browser camera below to capture a frame for verification."
+        )
 
-        while st.session_state.run_cam:
-            ret, frame = cap.read()
-            if not ret:
-                st.error("Cannot read from webcam.")
-                break
+        cam_img = st.camera_input("", label_visibility="collapsed")
 
-            frame_count += 1
-            if frame_count % 3 != 0:    # process every 3rd frame only
-                continue
+        if cam_img is not None:
+            img_pil = Image.open(cam_img).convert("RGB")
+            img_bgr = np.array(img_pil)[:, :, ::-1]
 
-            frame = cv2.resize(frame, (640, 480))
-            embeddings, boxes = get_all_embeddings(frame)
-            rows = ""
+            with st.spinner("Verifying captured frame..."):
+                results = verify_image(
+                    img_bgr,
+                    registered_users=users,
+                    source="webcam_snapshot"
+                )
 
-            for emb, box in zip(embeddings, boxes):
-                name, set_id, score = find_best_match(emb, users)
-                ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                now = datetime.now()
-                x1, y1, x2, y2 = [int(c) for c in box]
+            if not results:
+                st.warning("No faces detected in the captured frame.")
+            else:
+                rows = ""
+                for item in results:
+                    kind = "ok"
+                    if item["status"] == "Unknown":
+                        kind = "fail"
+                    elif item["status"] == "Duplicate":
+                        kind = "dup"
+                    rows += result_row(item["name"], item["score"], kind)
 
-                _, buf      = cv2.imencode(".jpg", frame)
-                image_bytes = buf.tobytes()
-                face_b64    = base64.b64encode(image_bytes).decode("utf-8")
-
-                if name == "Unknown":
-                    color = (50, 50, 200)
-                    # Log + alert only every LOG_INTERVAL_SEC seconds
-                    if should_log("Unknown"):
-                        save_log("Unknown", "Unknown", score, face_b64)
-                        save_unknown(face_b64, source="webcam")
-                        st.session_state.last_log_time["Unknown"] = now
-                        if not st.session_state.alert_sent:
-                            alert_unknown_face(timestamp=ts, image_bytes=image_bytes)
-                            st.session_state.alert_sent = True
-                        cnt = count_unknowns_in_window(config.UNKNOWN_ALERT_WINDOW)
-                        if cnt >= config.UNKNOWN_ALERT_COUNT:
-                            alert_multiple_unknowns(cnt, config.UNKNOWN_ALERT_WINDOW, image_bytes)
-                    rows += result_row("Unknown", score, "fail")
-
-                else:
-                    color  = (20, 160, 20)
-                    recent = st.session_state.recent_entries
-                    dup    = (name in recent and
-                              (now - recent[name]).total_seconds() < config.DUPLICATE_WINDOW_SEC)
-
-                    if dup:
-                        # Log duplicate only every LOG_INTERVAL_SEC seconds
-                        if should_log(f"dup_{name}"):
-                            if not st.session_state.alert_sent:
-                                alert_duplicate_entry(name, timestamp=ts)
-                                st.session_state.alert_sent = True
-                            save_log(name, "Duplicate", score, face_b64)
-                            st.session_state.last_log_time[f"dup_{name}"] = now
-                        rows += result_row(name, score, "dup")
-                    else:
-                        # First valid entry — log it, then gate further logs
-                        if should_log(name):
-                            recent[name] = now
-                            save_log(name, "Verified", score, face_b64)
-                            st.session_state.last_log_time[name] = now
-                            # Reset alert flag so next unknown triggers fresh alert
-                            st.session_state.alert_sent = False
-                        rows += result_row(name, score, "ok")
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                cv2.rectangle(frame, (x1, y1 - 26), (x2, y1), color, -1)
-                cv2.putText(frame, f"{name}  {score:.2f}", (x1 + 5, y1 - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 255, 255), 1)
-
-            feed_slot.image(frame[:, :, ::-1], channels="RGB",
-                            use_container_width=True)
-            if rows:
+                feed_slot.image(img_pil, use_container_width=True)
                 result_slot.markdown(result_table(rows), unsafe_allow_html=True)
-
-        cap.release()
 
 
 # =============================================================
