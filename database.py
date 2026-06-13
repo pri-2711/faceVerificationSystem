@@ -16,28 +16,34 @@ import config
 
 # ── Persistent connection ─────────────────────────────────────
 
-@st.cache_resource
+def _get_client():
+    """Create the MongoDB client once per Streamlit session."""
+    return MongoClient(
+        config.MONGO_URI,
+        serverSelectionTimeoutMS = 5000,
+        connectTimeoutMS         = 5000,
+    )
+
+
 def _get_db():
     """
-    Create the MongoDB connection exactly once per Streamlit session.
-    @st.cache_resource keeps it alive across all reruns — no
-    reconnection on every button click or page interaction.
+    Resolve the MongoDB database and verify the server is reachable.
+
+    The client itself is cached, but the ping runs on each rerun so a
+    transient startup failure does not get stuck in the UI.
     """
     try:
-        client = MongoClient(
-            config.MONGO_URI,
-            serverSelectionTimeoutMS = 5000,
-            connectTimeoutMS         = 5000,
-        )
+        client = _get_client()
         client.admin.command("ping")   # confirms connection is live
         print("[DB] MongoDB connected.")
         return client[config.DB_NAME]
-    except Exception:
+    except Exception as exc:
         st.error(
-            "**MongoDB is not running.**\n\n"
-            "Open a terminal as Administrator and run:\n"
-            "```\nnet start MongoDB\n```\n"
-            "Then refresh this page."
+            "**MongoDB connection failed.**\n\n"
+            f"URI: `{config.MONGO_URI}`\n\n"
+            f"Details: `{exc}`\n\n"
+            "If MongoDB was just started, refresh the app. Otherwise check\n"
+            "the URI in `config.py` and confirm the MongoDB service is up."
         )
         st.stop()
 
