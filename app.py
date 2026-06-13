@@ -275,9 +275,6 @@ class LiveVerificationProcessor(VideoProcessorBase):
         image = frame.to_ndarray(format="bgr24")
         self.frame_count += 1
 
-        if self.frame_count % 3 != 0:
-            return VideoFrame.from_ndarray(image, format="bgr24")
-
         embeddings, boxes = get_all_embeddings(image)
         now = datetime.now()
 
@@ -379,7 +376,15 @@ if page == "Live Verification":
         rtc_configuration=RTCConfiguration(
             {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
         ),
-        media_stream_constraints={"video": True, "audio": False},
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 1280, "max": 1920},
+                "height": {"ideal": 720, "max": 1080},
+                "frameRate": {"ideal": 30, "max": 30},
+                "facingMode": "user",
+            },
+            "audio": False,
+        },
         video_processor_factory=LiveVerificationProcessor,
         async_processing=True,
     )
