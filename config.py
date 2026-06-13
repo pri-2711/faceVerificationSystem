@@ -23,7 +23,7 @@ def _setting(name: str, default):
 
 
 # ----- MongoDB -----------------------------------------------
-MONGO_URI = _setting("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_URI = _setting("MONGO_URI", "mongodb://127.0.0.1:27017/")
 DB_NAME = _setting("DB_NAME", "face_verification")
 
 # ----- Gmail Alerts ------------------------------------------
