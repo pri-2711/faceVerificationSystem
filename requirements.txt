@@ -1,10 +1,11 @@
 facenet-pytorch
 opencv-python-headless
 streamlit
-pymongo
+pymongo[srv]
 pandas
 scikit-learn
 Pillow
 torch
 torchvision
+dnspython
 # smtplib, ssl, base64, email — all built into Python standard library
