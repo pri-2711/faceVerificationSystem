@@ -9,6 +9,14 @@ import pandas as pd
 import base64
 from datetime import datetime
 from PIL import Image
+from av import VideoFrame
+
+from streamlit_webrtc import (
+    RTCConfiguration,
+    VideoProcessorBase,
+    WebRtcMode,
+    webrtc_streamer,
+)
 
 from database   import (
     load_all_users, save_user, delete_user,
@@ -249,70 +257,132 @@ def should_log(name):
     return (datetime.now() - last).total_seconds() >= LOG_INTERVAL_SEC
 
 
+class LiveVerificationProcessor(VideoProcessorBase):
+    def __init__(self):
+        self.users = st.session_state.get("live_users", [])
+        self.frame_count = 0
+        self.recent_entries = {}
+        self.last_log_time = {}
+        self.alert_sent = False
+
+    def _should_log(self, name):
+        last = self.last_log_time.get(name)
+        if last is None:
+            return True
+        return (datetime.now() - last).total_seconds() >= LOG_INTERVAL_SEC
+
+    def recv(self, frame):
+        image = frame.to_ndarray(format="bgr24")
+        self.frame_count += 1
+
+        if self.frame_count % 3 != 0:
+            return VideoFrame.from_ndarray(image, format="bgr24")
+
+        embeddings, boxes = get_all_embeddings(image)
+        now = datetime.now()
+
+        for emb, box in zip(embeddings, boxes):
+            name, set_id, score = find_best_match(emb, self.users)
+            x1, y1, x2, y2 = [int(c) for c in box]
+
+            _, buf = cv2.imencode(".jpg", image)
+            image_bytes = buf.tobytes()
+            face_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+            if name == "Unknown":
+                color = (50, 50, 200)
+                if self._should_log("Unknown"):
+                    save_log("Unknown", "Unknown", score, face_b64)
+                    save_unknown(face_b64, source="webcam")
+                    self.last_log_time["Unknown"] = now
+                    if not self.alert_sent:
+                        alert_unknown_face(
+                            timestamp=now.strftime("%Y-%m-%d %H:%M:%S"),
+                            image_bytes=image_bytes,
+                        )
+                        self.alert_sent = True
+                    cnt = count_unknowns_in_window(config.UNKNOWN_ALERT_WINDOW)
+                    if cnt >= config.UNKNOWN_ALERT_COUNT:
+                        alert_multiple_unknowns(
+                            cnt,
+                            config.UNKNOWN_ALERT_WINDOW,
+                            image_bytes,
+                        )
+            else:
+                color = (20, 160, 20)
+                recent = self.recent_entries
+                duplicate = (
+                    name in recent
+                    and (now - recent[name]).total_seconds() < config.DUPLICATE_WINDOW_SEC
+                )
+
+                if duplicate:
+                    if self._should_log(f"dup_{name}"):
+                        if not self.alert_sent:
+                            alert_duplicate_entry(
+                                name,
+                                timestamp=now.strftime("%Y-%m-%d %H:%M:%S"),
+                            )
+                            self.alert_sent = True
+                        save_log(name, "Duplicate", score, face_b64)
+                        self.last_log_time[f"dup_{name}"] = now
+                else:
+                    if self._should_log(name):
+                        recent[name] = now
+                        save_log(name, "Verified", score, face_b64)
+                        self.last_log_time[name] = now
+                        self.alert_sent = False
+
+            label = f"{name}  {score:.2f}"
+            cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(image, (x1, y1 - 26), (x2, y1), color, -1)
+            cv2.putText(
+                image,
+                label,
+                (x1 + 5, y1 - 8),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.52,
+                (255, 255, 255),
+                1,
+            )
+
+        return VideoFrame.from_ndarray(image, format="bgr24")
+
+
 # =============================================================
 #  PAGE 1 — Live Verification
 # =============================================================
 if page == "Live Verification":
-    page_header("Live Verification", "Browser-based face verification")
+    page_header("Live Verification", "Real-time face recognition with live bounding boxes")
 
     users = load_all_users()
     if not users:
         notice("No users registered yet. Go to <b>Register</b> or <b>Bulk Register</b> first.")
         st.stop()
 
-    col_a, col_b, col_c = st.columns([1, 1, 4])
-    with col_a:
-        if st.button("Start"):
-            st.session_state.run_cam        = True
-            st.session_state.alert_sent     = False
-            st.session_state.recent_entries = {}
-            st.session_state.last_log_time  = {}
-    with col_b:
-        if st.button("Stop"):
-            st.session_state.run_cam = False
-    with col_c:
-        st.markdown(
-            f"<div style='font-size:12px;color:#888;padding-top:9px;'>"
-            f"{len(users)} user(s) loaded</div>",
-            unsafe_allow_html=True
-        )
+    st.session_state.live_users = users
 
-    feed_slot   = st.empty()
-    result_slot = st.empty()
+    notice(
+        "Allow camera access in the browser, then start the stream below. "
+        "Bounding boxes and labels are drawn on each frame in real time."
+    )
 
-    if st.session_state.run_cam:
-        notice(
-            "Streamlit Community Cloud cannot access your machine's webcam through OpenCV. "
-            "Use the browser camera below to capture a frame for verification."
-        )
+    st.markdown(
+        f"<div style='font-size:12px;color:#888;margin-bottom:10px;'>"
+        f"{len(users)} user(s) loaded</div>",
+        unsafe_allow_html=True,
+    )
 
-        cam_img = st.camera_input("", label_visibility="collapsed")
-
-        if cam_img is not None:
-            img_pil = Image.open(cam_img).convert("RGB")
-            img_bgr = np.array(img_pil)[:, :, ::-1]
-
-            with st.spinner("Verifying captured frame..."):
-                results = verify_image(
-                    img_bgr,
-                    registered_users=users,
-                    source="webcam_snapshot"
-                )
-
-            if not results:
-                st.warning("No faces detected in the captured frame.")
-            else:
-                rows = ""
-                for item in results:
-                    kind = "ok"
-                    if item["status"] == "Unknown":
-                        kind = "fail"
-                    elif item["status"] == "Duplicate":
-                        kind = "dup"
-                    rows += result_row(item["name"], item["score"], kind)
-
-                feed_slot.image(img_pil, use_container_width=True)
-                result_slot.markdown(result_table(rows), unsafe_allow_html=True)
+    webrtc_streamer(
+        key="face-live-verification",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTCConfiguration(
+            {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+        ),
+        media_stream_constraints={"video": True, "audio": False},
+        video_processor_factory=LiveVerificationProcessor,
+        async_processing=True,
+    )
 
 
 # =============================================================
