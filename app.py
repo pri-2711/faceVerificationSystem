@@ -258,8 +258,8 @@ def should_log(name):
 
 
 class LiveVerificationProcessor(VideoProcessorBase):
-    def __init__(self):
-        self.users = st.session_state.get("live_users", [])
+    def __init__(self, users):
+        self.users = users or []
         self.frame_count = 0
         self.recent_entries = {}
         self.last_log_time = {}
@@ -370,6 +370,9 @@ if page == "Live Verification":
         unsafe_allow_html=True,
     )
 
+    def _processor_factory():
+        return LiveVerificationProcessor(users)
+
     webrtc_streamer(
         key="face-live-verification",
         mode=WebRtcMode.SENDRECV,
@@ -385,7 +388,7 @@ if page == "Live Verification":
             },
             "audio": False,
         },
-        video_processor_factory=LiveVerificationProcessor,
+        video_processor_factory=_processor_factory,
         async_processing=True,
     )
 
